@@ -1,0 +1,13 @@
+# macOS-specific requirements for Recall Menu Bar App
+# Install on macOS only: pip install -r requirements-macos.txt
+
+# Menu bar app framework
+rumps>=0.4.0
+
+# Global hotkeys
+pynput>=1.7.0
+
+# macOS system integration (installed as dependencies)
+# pyobjc-core
+# pyobjc-framework-Cocoa
+# pyobjc-framework-Quartz

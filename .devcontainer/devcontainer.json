@@ -21,9 +21,7 @@
         "ms-python.vscode-pylance",
         "ms-toolsai.jupyter",
         "ms-python.black-formatter",
-        "charliermarsh.ruff",
-        "github.copilot",
-        "github.copilot-chat"
+        "charliermarsh.ruff"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/usr/local/bin/python",
@@ -31,11 +29,11 @@
         "python.linting.pylintEnabled": false,
         "python.formatting.provider": "none",
         "[python]": {
-          "editor.defaultFormatter": "ms-python.black-formatter",
           "editor.formatOnSave": true,
           "editor.codeActionsOnSave": {
             "source.organizeImports": "explicit"
-          }
+          },
+          "editor.defaultFormatter": "ms-python.black-formatter"
         },
         "python.testing.pytestEnabled": true,
         "python.testing.pytestArgs": ["tests"]

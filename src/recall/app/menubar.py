@@ -100,6 +100,7 @@ class RecallMenuBar:
         self._icon = AppState.IDLE.icon
         self._quit_requested = False
         self._recording_start_time: Optional[float] = None
+        self._voice_note_active: bool = False
 
         # Initialize recording controller
         self.recording_controller = RecordingController(output_dir=output_dir)
@@ -211,13 +212,23 @@ class RecallMenuBar:
                 key="n",
             )
         )
-        items.append(
-            MenuItem(
-                title="Voice Note",
-                callback="on_voice_note",
-                key="v",
+        # Voice Note toggle
+        if self._voice_note_active:
+            items.append(
+                MenuItem(
+                    title="Stop Voice Note",
+                    callback="on_voice_note",
+                    key="v",
+                )
             )
-        )
+        else:
+            items.append(
+                MenuItem(
+                    title="Voice Note",
+                    callback="on_voice_note",
+                    key="v",
+                )
+            )
 
         items.append(MenuItem.separator())
 
@@ -273,29 +284,312 @@ class RecallMenuBar:
         # In real implementation, this would be async
 
     def on_quick_note(self, sender) -> None:
-        """Handle Quick Note action."""
-        # TODO: Show text input dialog
-        pass
+        """Handle Quick Note action.
+
+        Shows a text input dialog and saves the note using create_note().
+        """
+        if not RUMPS_AVAILABLE:
+            # Mock mode - just log
+            return
+
+        window = rumps.Window(
+            message="Enter your note:",
+            title="Quick Note",
+            default_text="",
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(320, 160),
+        )
+        response = window.run()
+
+        if response.clicked:
+            text = response.text.strip()
+            if not text:
+                rumps.alert(
+                    title="Empty Note",
+                    message="Please enter some text for your note.",
+                )
+                return
+
+            try:
+                from recall.notes.quick_note import create_note
+
+                create_note(content=text)
+                self.notification_manager.send(
+                    title="Note Saved",
+                    message="Quick note saved successfully.",
+                )
+            except Exception as e:
+                self.notification_manager.notify_error(
+                    f"Failed to save note: {e}"
+                )
 
     def on_voice_note(self, sender) -> None:
-        """Handle Voice Note action."""
-        # TODO: Start voice recording
-        pass
+        """Handle Voice Note action.
+
+        Toggles voice note recording. On first click, starts recording.
+        On second click, stops recording, transcribes, and saves.
+        """
+        if self._voice_note_active:
+            # Stop recording
+            self._stop_voice_note()
+        else:
+            # Start recording
+            self._start_voice_note()
+
+    def _start_voice_note(self) -> None:
+        """Start voice note recording."""
+        try:
+            from recall.notes.voice_note import start_voice_note
+
+            start_voice_note()
+            self._voice_note_active = True
+            self._icon = "🎙️"
+
+            if RUMPS_AVAILABLE and self._rumps_app:
+                self._rumps_app.title = self._icon
+                self._update_rumps_menu()
+
+            self.notification_manager.send(
+                title="Voice Note",
+                message="Recording started. Click 'Stop Voice Note' when done.",
+            )
+        except Exception as e:
+            self.notification_manager.notify_error(f"Failed to start voice note: {e}")
+
+    def _stop_voice_note(self) -> None:
+        """Stop voice note recording and save."""
+        try:
+            from recall.notes.voice_note import stop_voice_note
+
+            recording = stop_voice_note()
+            self._voice_note_active = False
+            self._icon = self._state.icon
+
+            if RUMPS_AVAILABLE and self._rumps_app:
+                self._rumps_app.title = self._icon
+                self._update_rumps_menu()
+
+            duration = recording.duration_seconds or 0
+            self.notification_manager.send(
+                title="Voice Note Saved",
+                message=f"Voice note saved ({duration} seconds)",
+            )
+        except Exception as e:
+            self._voice_note_active = False
+            self._icon = self._state.icon
+            if RUMPS_AVAILABLE and self._rumps_app:
+                self._rumps_app.title = self._icon
+                self._update_rumps_menu()
+            self.notification_manager.notify_error(f"Failed to save voice note: {e}")
 
     def on_search(self, sender) -> None:
-        """Handle Search action."""
-        # TODO: Show search dialog
-        pass
+        """Handle Search action.
+
+        Shows a search input dialog and displays results from the SQLite index.
+        """
+        if not RUMPS_AVAILABLE:
+            # Mock mode - just log
+            return
+
+        window = rumps.Window(
+            message="Search your notes and recordings:",
+            title="Search Recall",
+            default_text="",
+            ok="Search",
+            cancel="Cancel",
+            dimensions=(320, 40),
+        )
+        response = window.run()
+
+        if response.clicked:
+            query = response.text.strip()
+            if not query:
+                rumps.alert(
+                    title="Empty Search",
+                    message="Please enter a search query.",
+                )
+                return
+
+            try:
+                results = self._perform_search(query)
+                self._display_search_results(query, results)
+            except Exception as e:
+                self.notification_manager.notify_error(f"Search failed: {e}")
+
+    def _perform_search(self, query: str):
+        """Perform search using RecordingIndex.
+
+        Args:
+            query: Search query string
+
+        Returns:
+            List of SearchResult objects
+        """
+        from recall.config import RecallConfig
+        from recall.storage.index import RecordingIndex
+
+        config = RecallConfig.load()
+        index_path = config.storage_dir / "index.db"
+
+        if not index_path.exists():
+            return []
+
+        with RecordingIndex(str(index_path)) as index:
+            return index.search(query)
+
+    def _display_search_results(self, query: str, results) -> None:
+        """Display search results in an alert dialog.
+
+        Args:
+            query: The search query
+            results: List of SearchResult objects
+        """
+        if not results:
+            rumps.alert(
+                title="No Results",
+                message=f'No matches found for "{query}"',
+            )
+            return
+
+        # Format results for display (top 5)
+        result_lines = []
+        for i, result in enumerate(results[:5], 1):
+            filename = result.filepath.name
+            date_str = result.timestamp.strftime("%Y-%m-%d")
+            snippet = (result.summary_snippet[:50] + "...") if len(result.summary_snippet) > 50 else result.summary_snippet
+            result_lines.append(f"{i}. {filename}\n   {date_str} - {snippet}")
+
+        message = "\n\n".join(result_lines)
+
+        if len(results) > 5:
+            message += f"\n\n... and {len(results) - 5} more results"
+
+        rumps.alert(
+            title=f'Search Results for "{query}"',
+            message=message,
+        )
 
     def on_open_library(self, sender) -> None:
-        """Handle Open Library action."""
-        # TODO: Open Finder to recordings folder
-        pass
+        """Handle Open Library action.
+
+        Opens Finder at the recordings directory. Creates the directory
+        if it doesn't exist.
+        """
+        import subprocess
+
+        from recall.config import RecallConfig
+
+        try:
+            config = RecallConfig.load()
+            recordings_path = config.storage_dir / "recordings"
+            recordings_path.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["open", str(recordings_path)], check=True)
+        except subprocess.CalledProcessError as e:
+            self.notification_manager.notify_error(
+                f"Failed to open library: {e}"
+            )
+        except Exception as e:
+            self.notification_manager.notify_error(
+                f"Error opening library: {e}"
+            )
 
     def on_settings(self, sender) -> None:
-        """Handle Settings action."""
-        # TODO: Show settings dialog
-        pass
+        """Handle Settings action.
+
+        Shows a settings dialog that allows viewing and modifying key settings.
+        Settings are persisted to config.json.
+        """
+        if not RUMPS_AVAILABLE:
+            # Mock mode - just log
+            return
+
+        from recall.config import RecallConfig
+
+        try:
+            config = RecallConfig.load()
+            self._show_settings_dialog(config)
+        except Exception as e:
+            self.notification_manager.notify_error(f"Failed to load settings: {e}")
+
+    def _show_settings_dialog(self, config) -> None:
+        """Show the settings dialog.
+
+        Args:
+            config: Current RecallConfig instance
+        """
+        # Display current settings in a formatted text
+        current_settings = (
+            f"Current Settings:\n\n"
+            f"audio_source: {config.default_audio_source}\n"
+            f"whisper_model: {config.whisper_model}\n"
+            f"retain_audio: {config.retain_audio}\n"
+            f"auto_recording: {config.auto_recording_enabled}\n\n"
+            f"Edit the values above (key: value format) or leave as-is."
+        )
+
+        window = rumps.Window(
+            message="Modify settings below:",
+            title="Recall Settings",
+            default_text=current_settings,
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(400, 200),
+        )
+        response = window.run()
+
+        if response.clicked:
+            self._parse_and_save_settings(response.text, config)
+
+    def _parse_and_save_settings(self, text: str, config) -> None:
+        """Parse settings from text and save.
+
+        Args:
+            text: Settings text in key: value format
+            config: Current RecallConfig instance
+        """
+        try:
+            # Parse settings from text
+            for line in text.split("\n"):
+                line = line.strip()
+                if ":" not in line or line.startswith("Current") or line.startswith("Edit"):
+                    continue
+
+                key, value = line.split(":", 1)
+                key = key.strip()
+                value = value.strip()
+
+                if key == "audio_source":
+                    if value in ["microphone", "system", "both"]:
+                        config.default_audio_source = value
+                    else:
+                        rumps.alert(
+                            title="Invalid Value",
+                            message="audio_source must be: microphone, system, or both",
+                        )
+                        return
+                elif key == "whisper_model":
+                    if value in ["tiny", "base", "small", "medium", "large"]:
+                        config.whisper_model = value
+                    else:
+                        rumps.alert(
+                            title="Invalid Value",
+                            message="whisper_model must be: tiny, base, small, medium, or large",
+                        )
+                        return
+                elif key == "retain_audio":
+                    config.retain_audio = value.lower() in ["true", "yes", "1"]
+                elif key == "auto_recording":
+                    config.auto_recording_enabled = value.lower() in ["true", "yes", "1"]
+
+            # Save config
+            config.save()
+            self.notification_manager.send(
+                title="Settings Saved",
+                message="Your settings have been saved.",
+            )
+        except Exception as e:
+            self.notification_manager.notify_error(f"Failed to save settings: {e}")
 
     def on_quit(self, sender) -> None:
         """Handle Quit action."""

@@ -6,10 +6,17 @@ TDD tests for the check_audio_setup.py script:
 - Setup recommendations
 """
 
+import sys
 from io import StringIO
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# Add the project root to the path so we can import from scripts
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 # Import at module level to avoid freezegun issues
 from scripts.check_audio_setup import (

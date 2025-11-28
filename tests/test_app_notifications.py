@@ -130,13 +130,22 @@ class TestNotificationManager:
 
     def test_send_notification_without_rumps_logs_fallback(self):
         """Test that notifications log a message when rumps unavailable."""
+        import recall.app.notifications as notifications_module
         from recall.app.notifications import NotificationManager
 
-        with patch("recall.app.notifications.RUMPS_AVAILABLE", False):
+        # Save original rumps reference
+        original_rumps = notifications_module.rumps
+
+        try:
+            # Simulate rumps not being available
+            notifications_module.rumps = None
             manager = NotificationManager()
 
             # Should not raise, just log
             manager.send("Title", "Message")
+        finally:
+            # Restore rumps
+            notifications_module.rumps = original_rumps
 
 
 # ============================================================================

@@ -4,15 +4,25 @@ This module provides:
 - App bundle configuration for py2app
 - Model download and management
 - First-run setup experience
+- Model discovery in custom locations
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
 # Default models directory
 DEFAULT_MODELS_DIR = Path.home() / ".recall" / "models"
+
+
+class ModelSetupChoice(Enum):
+    """User's choice for model setup."""
+
+    DOWNLOAD = "download"
+    LOCATE_EXISTING = "locate_existing"
+    SKIP = "skip"
 
 
 @dataclass
@@ -58,6 +68,7 @@ class ModelInfo:
     url: str
     size_mb: float
     sha256: str = ""
+    found_path: Optional[Path] = None
 
 
 @dataclass
@@ -72,7 +83,7 @@ class DownloadProgressEvent:
 
 
 class ModelManager:
-    """Manages model downloads and verification."""
+    """Manages model downloads, verification, and discovery."""
 
     # Default required models
     REQUIRED_MODELS = [
@@ -91,14 +102,62 @@ class ModelManager:
         ),
     ]
 
-    def __init__(self, models_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        models_dir: Optional[Path] = None,
+        search_paths: Optional[list[Path]] = None,
+        project_dir: Optional[Path] = None,
+    ):
         """Initialize model manager.
 
         Args:
-            models_dir: Directory for storing models. Defaults to ~/.recall/models
+            models_dir: Directory for storing/downloading models. Defaults to ~/.recall/models
+            search_paths: List of directories to search for existing models.
+            project_dir: Project directory to check for ./models folder.
         """
-        self.models_dir = models_dir or DEFAULT_MODELS_DIR
+        self.models_dir = Path(models_dir) if models_dir else DEFAULT_MODELS_DIR
         self.models_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build search paths
+        self._search_paths: list[Path] = []
+        if search_paths:
+            self._search_paths.extend(Path(p) if not isinstance(p, Path) else p for p in search_paths)
+
+        # Add project models dir if specified
+        if project_dir:
+            project_dir = Path(project_dir) if not isinstance(project_dir, Path) else project_dir
+            project_models = project_dir / "models"
+            if project_models.exists():
+                self._search_paths.append(project_models)
+
+        # Add default paths
+        for path in self.get_default_search_paths():
+            if path not in self._search_paths:
+                self._search_paths.append(path)
+
+    @property
+    def search_paths(self) -> list[Path]:
+        """Get list of paths to search for models.
+
+        Returns:
+            List of Path objects to search.
+        """
+        return self._search_paths.copy()
+
+    def get_default_search_paths(self) -> list[Path]:
+        """Get default paths where models might be found.
+
+        Returns:
+            List of default search paths including potential locations.
+        """
+        paths = [
+            self.models_dir,
+            Path.home() / ".recall" / "models",
+            Path.home() / ".cache" / "whisper",  # Whisper's default cache
+            Path.home() / ".cache" / "huggingface",  # HuggingFace cache
+        ]
+        # Return all paths - find_model_path will check if they exist
+        return paths
 
     def get_required_models(self) -> list[ModelInfo]:
         """Get list of required models.
@@ -106,10 +165,25 @@ class ModelManager:
         Returns:
             List of ModelInfo for required models.
         """
-        return self.REQUIRED_MODELS.copy()
+        return [ModelInfo(**{k: v for k, v in m.__dict__.items()}) for m in self.REQUIRED_MODELS]
+
+    def find_model_path(self, model: ModelInfo) -> Optional[Path]:
+        """Find a model file in any of the search paths.
+
+        Args:
+            model: Model info to find.
+
+        Returns:
+            Path to the model file if found, None otherwise.
+        """
+        for search_path in self._search_paths:
+            model_path = search_path / model.filename
+            if model_path.exists():
+                return model_path
+        return None
 
     def check_model_exists(self, model: ModelInfo) -> bool:
-        """Check if a model file exists.
+        """Check if a model file exists in any search path.
 
         Args:
             model: Model info to check.
@@ -117,8 +191,7 @@ class ModelManager:
         Returns:
             True if model file exists.
         """
-        model_path = self.models_dir / model.filename
-        return model_path.exists()
+        return self.find_model_path(model) is not None
 
     def get_missing_models(self) -> list[ModelInfo]:
         """Get list of models that need to be downloaded.
@@ -127,6 +200,89 @@ class ModelManager:
             List of ModelInfo for missing models.
         """
         return [m for m in self.get_required_models() if not self.check_model_exists(m)]
+
+    def discover_existing_models(self) -> list[ModelInfo]:
+        """Discover which required models already exist.
+
+        Returns:
+            List of ModelInfo for found models, with found_path set.
+        """
+        found = []
+        for model in self.get_required_models():
+            path = self.find_model_path(model)
+            if path:
+                model.found_path = path
+                found.append(model)
+        return found
+
+    def get_model_status(self) -> dict[str, list[ModelInfo]]:
+        """Get status of all required models.
+
+        Returns:
+            Dictionary with 'found' and 'missing' lists of ModelInfo.
+        """
+        found = []
+        missing = []
+        for model in self.get_required_models():
+            path = self.find_model_path(model)
+            if path:
+                model.found_path = path
+                found.append(model)
+            else:
+                missing.append(model)
+        return {"found": found, "missing": missing}
+
+    def validate_model_path(self, path: Path) -> bool:
+        """Validate that a path exists and is a directory.
+
+        Args:
+            path: Path to validate.
+
+        Returns:
+            True if path is a valid directory.
+        """
+        return path.exists() and path.is_dir()
+
+    def prompt_for_model_path(self) -> Optional[Path]:
+        """Prompt user for a custom model path.
+
+        Returns:
+            Path entered by user, or None if cancelled.
+        """
+        user_input = input("Enter path to models directory (or press Enter to skip): ").strip()
+        if not user_input:
+            return None
+        path = Path(user_input).expanduser().resolve()
+        return path if self.validate_model_path(path) else None
+
+    def prompt_download_or_locate(self) -> ModelSetupChoice:
+        """Prompt user to choose between downloading or locating models.
+
+        Returns:
+            User's choice.
+        """
+        print("\nModel Setup Options:")
+        print("  1. Download models (~2.2 GB)")
+        print("  2. Locate existing models on disk")
+        print("  3. Skip (models will be downloaded on first use)")
+
+        choice = input("\nEnter choice [1-3]: ").strip()
+
+        if choice == "1":
+            return ModelSetupChoice.DOWNLOAD
+        elif choice == "2":
+            return ModelSetupChoice.LOCATE_EXISTING
+        else:
+            return ModelSetupChoice.SKIP
+
+    def add_search_path(self, path: Path) -> None:
+        """Add a path to search for models.
+
+        Args:
+            path: Directory path to add.
+        """
+        if path not in self._search_paths and path.exists():
+            self._search_paths.insert(0, path)  # Prioritize user-specified paths
 
     def download_model(
         self,
@@ -364,6 +520,7 @@ setup(
 __all__ = [
     "AppConfig",
     "ModelInfo",
+    "ModelSetupChoice",
     "DownloadProgressEvent",
     "ModelManager",
     "SetupStep",

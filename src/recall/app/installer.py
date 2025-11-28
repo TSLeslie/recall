@@ -164,16 +164,58 @@ class AppLauncher:
     """Handles app launch logic and first-run detection."""
 
     SETUP_COMPLETE_FILE = ".setup_complete"
+    CONFIG_FILE = "config.json"
 
-    def __init__(self, config_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        config_dir: Optional[Path] = None,
+        project_dir: Optional[Path] = None,
+    ):
         """Initialize app launcher.
 
         Args:
             config_dir: Configuration directory path.
+            project_dir: Project directory to search for models.
         """
+        from recall.app.bundle import ModelManager
+
         self.config_dir = config_dir or DEFAULT_CONFIG_DIR
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self._setup_file = self.config_dir / self.SETUP_COMPLETE_FILE
+        self._config_file = self.config_dir / self.CONFIG_FILE
+        self._project_dir = project_dir
+
+        # Load config if exists
+        self._config = self._load_config()
+
+        # Initialize model manager with search paths
+        search_paths = []
+        if self._config.get("models_path"):
+            custom_path = Path(self._config["models_path"])
+            if custom_path.exists():
+                search_paths.append(custom_path)
+
+        self.model_manager = ModelManager(
+            search_paths=search_paths if search_paths else None,
+            project_dir=project_dir,
+        )
+
+    def _load_config(self) -> dict:
+        """Load configuration from file.
+
+        Returns:
+            Configuration dictionary.
+        """
+        if self._config_file.exists():
+            try:
+                return json.loads(self._config_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                return {}
+        return {}
+
+    def _save_config(self) -> None:
+        """Save configuration to file."""
+        self._config_file.write_text(json.dumps(self._config, indent=2))
 
     def is_first_run(self) -> bool:
         """Check if this is the first run.
@@ -186,6 +228,32 @@ class AppLauncher:
     def mark_first_run_complete(self) -> None:
         """Mark first run as complete."""
         self._setup_file.write_text(json.dumps({"version": "0.1.0", "setup_complete": True}))
+
+    def find_existing_models(self) -> list:
+        """Find existing models in search paths.
+
+        Returns:
+            List of found ModelInfo objects.
+        """
+        return self.model_manager.discover_existing_models()
+
+    def get_missing_models(self) -> list:
+        """Get list of missing models.
+
+        Returns:
+            List of missing ModelInfo objects.
+        """
+        return self.model_manager.get_missing_models()
+
+    def set_models_path(self, path: Path) -> None:
+        """Set custom models path and save to config.
+
+        Args:
+            path: Path to models directory.
+        """
+        self._config["models_path"] = str(path)
+        self._save_config()
+        self.model_manager.add_search_path(path)
 
     def get_launch_mode(self) -> LaunchMode:
         """Get the appropriate launch mode.

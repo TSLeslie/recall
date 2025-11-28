@@ -161,16 +161,25 @@ class TestNotificationIntegrationE2E:
 
     def test_notification_manager_with_app(self):
         """Test that notification manager is properly integrated."""
-        with patch("recall.app.menubar.RUMPS_AVAILABLE", False):
-            with patch("recall.app.recording.Recorder"):
-                app = RecallMenuBar()
+        import recall.app.notifications as notifications_module
 
-                # Manager should be ready to send notifications
-                assert app.notification_manager.enabled is True
+        # Save and mock rumps
+        original_rumps = notifications_module.rumps
+        notifications_module.rumps = None
 
-                # Test sending via manager (will log since rumps unavailable)
-                app.notification_manager.notify_recording_started("microphone")
-                app.notification_manager.notify_recording_saved("Test", 60)
+        try:
+            with patch("recall.app.menubar.RUMPS_AVAILABLE", False):
+                with patch("recall.app.recording.Recorder"):
+                    app = RecallMenuBar()
+
+                    # Manager should be ready to send notifications
+                    assert app.notification_manager.enabled is True
+
+                    # Test sending via manager (will log since rumps unavailable)
+                    app.notification_manager.notify_recording_started("microphone")
+                    app.notification_manager.notify_recording_saved("Test", 60)
+        finally:
+            notifications_module.rumps = original_rumps
 
     def test_auto_recording_config_defaults(self):
         """Test auto-recording config has sensible defaults."""

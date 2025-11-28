@@ -217,7 +217,14 @@ def search(
         index = RecordingIndex(index_path)
 
         # Search
-        results = index.search(query, limit=limit, source=source)
+        results = index.search(query)
+
+        # Apply source filter if specified
+        if source:
+            results = [r for r in results if r.source == source]
+
+        # Apply limit
+        results = results[:limit]
 
         if not results:
             console.print(f"[yellow]No results found for:[/yellow] {query}")

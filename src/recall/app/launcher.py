@@ -18,14 +18,19 @@ def main():
 
     from recall.app.installer import AppLauncher, LaunchMode
 
+    # Detect project directory (if running from source)
+    project_dir = Path(__file__).parent.parent.parent.parent
+    if not (project_dir / "models").exists():
+        project_dir = None
+
     # Check launch mode
-    launcher = AppLauncher()
+    launcher = AppLauncher(project_dir=project_dir)
     mode = launcher.get_launch_mode()
 
     if mode == LaunchMode.FIRST_RUN_WIZARD:
         run_first_run_wizard(launcher)
     elif mode == LaunchMode.MODEL_DOWNLOAD:
-        run_model_download()
+        run_model_download(launcher)
 
     # Start the menu bar app
     run_menu_bar_app()
@@ -35,9 +40,9 @@ def run_first_run_wizard(launcher):
     """Run the first-run setup wizard.
 
     Args:
-        launcher: AppLauncher instance.
+        launcher: AppLauncher instance with model_manager.
     """
-    from recall.app.bundle import ModelManager
+    from recall.app.bundle import ModelSetupChoice
     from recall.app.installer import FirstRunWizard
     from recall.app.permissions import PermissionManager
 
@@ -56,15 +61,7 @@ def run_first_run_wizard(launcher):
         print()
 
         if page.name == "model_download":
-            # Check and download models
-            model_manager = ModelManager()
-            missing = model_manager.get_missing_models()
-
-            if missing:
-                print(f"Missing models: {[m.name for m in missing]}")
-                print("Models will be downloaded on first use.")
-            else:
-                print("All models already downloaded!")
+            handle_model_setup(launcher)
 
         elif page.name == "permissions":
             # Show permission status
@@ -78,24 +75,98 @@ def run_first_run_wizard(launcher):
     print("\nSetup complete! Starting Recall...")
 
 
-def run_model_download():
-    """Run model download only."""
-    from recall.app.bundle import ModelManager
+def handle_model_setup(launcher):
+    """Handle model discovery and setup.
 
-    manager = ModelManager()
-    missing = manager.get_missing_models()
+    Args:
+        launcher: AppLauncher instance with model_manager.
+    """
+    from recall.app.bundle import ModelSetupChoice
+
+    model_manager = launcher.model_manager
+
+    # First, check for existing models
+    status = model_manager.get_model_status()
+    found = status["found"]
+    missing = status["missing"]
+
+    if found:
+        print("\n✓ Found existing models:")
+        for model in found:
+            print(f"  • {model.name}: {model.found_path}")
+
+    if not missing:
+        print("\n✓ All required models are available!")
+        return
+
+    print(f"\n⚠ Missing models:")
+    for model in missing:
+        print(f"  • {model.name} ({model.size_mb} MB)")
+
+    # Ask user what to do
+    choice = model_manager.prompt_download_or_locate()
+
+    if choice == ModelSetupChoice.LOCATE_EXISTING:
+        custom_path = model_manager.prompt_for_model_path()
+        if custom_path:
+            launcher.set_models_path(custom_path)
+            print(f"\n✓ Added model path: {custom_path}")
+
+            # Re-check for models
+            new_status = model_manager.get_model_status()
+            if new_status["found"]:
+                print("\n✓ Found models:")
+                for model in new_status["found"]:
+                    print(f"  • {model.name}: {model.found_path}")
+
+            if new_status["missing"]:
+                print("\n⚠ Still missing:")
+                for model in new_status["missing"]:
+                    print(f"  • {model.name}")
+                print("\nThese will be downloaded on first use.")
+        else:
+            print("\nNo valid path provided. Models will be downloaded on first use.")
+
+    elif choice == ModelSetupChoice.DOWNLOAD:
+        download_models(model_manager, missing)
+
+    else:  # SKIP
+        print("\nSkipping model setup. Models will be downloaded on first use.")
+
+
+def download_models(model_manager, models):
+    """Download the specified models with progress.
+
+    Args:
+        model_manager: ModelManager instance.
+        models: List of ModelInfo to download.
+    """
+    print("\nDownloading models...")
+
+    for model in models:
+        print(f"\nDownloading {model.name} ({model.size_mb} MB)...")
+        try:
+            path = model_manager.download_model(model)
+            print(f"  ✓ {model.name} downloaded to {path}")
+        except Exception as e:
+            print(f"  ✗ Failed to download {model.name}: {e}")
+            print("    You can try again later or download manually.")
+
+
+def run_model_download(launcher):
+    """Run model download only.
+
+    Args:
+        launcher: AppLauncher instance with model_manager.
+    """
+    model_manager = launcher.model_manager
+    missing = model_manager.get_missing_models()
 
     if not missing:
         print("All models are already downloaded!")
         return
 
-    for model in missing:
-        print(f"Downloading {model.name} ({model.size_mb} MB)...")
-        try:
-            manager.download_model(model)
-            print(f"  ✓ {model.name} downloaded")
-        except Exception as e:
-            print(f"  ✗ Failed to download {model.name}: {e}")
+    download_models(model_manager, missing)
 
 
 def run_menu_bar_app():

@@ -457,7 +457,8 @@ class RecallMenuBar:
         for i, result in enumerate(results[:5], 1):
             filename = result.filepath.name
             date_str = result.timestamp.strftime("%Y-%m-%d")
-            snippet = (result.summary_snippet[:50] + "...") if len(result.summary_snippet) > 50 else result.summary_snippet
+            snippet_text = result.summary_snippet or ""
+            snippet = (snippet_text[:50] + "...") if len(snippet_text) > 50 else snippet_text
             result_lines.append(f"{i}. {filename}\n   {date_str} - {snippet}")
 
         message = "\n\n".join(result_lines)
